@@ -1,0 +1,16 @@
+{
+  "version": 2,
+  "rewrites": [
+    { "source": "/", "destination": "/api/dashboard" },
+    { "source": "/auth", "destination": "/api/auth" },
+    { "source": "/callback", "destination": "/api/callback" },
+    { "source": "/aggregate", "destination": "/api/aggregate" },
+    { "source": "/admin", "destination": "/api/admin" },
+    { "source": "/snapshot", "destination": "/api/snapshot" },
+    { "source": "/refresh", "destination": "/api/refresh" }
+  ],
+  "crons": [
+    { "path": "/api/refresh", "schedule": "0 */6 * * *" },
+    { "path": "/api/snapshot", "schedule": "0 * * * *" }
+  ]
+}
