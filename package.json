@@ -1,0 +1,13 @@
+{
+  "name": "phiaco-tiktok",
+  "version": "1.0.0",
+  "description": "TikTok analytics center for Phia creator partnerships",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@vercel/kv": "^1.0.1"
+  }
+}
