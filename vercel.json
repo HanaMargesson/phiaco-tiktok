@@ -10,7 +10,7 @@
     { "source": "/refresh", "destination": "/api/refresh" }
   ],
   "crons": [
-    { "path": "/api/refresh", "schedule": "0 */6 * * *" },
-    { "path": "/api/snapshot", "schedule": "0 * * * *" }
+    { "path": "/api/refresh", "schedule": "0 8 * * *" },
+    { "path": "/api/snapshot", "schedule": "0 9 * * *" }
   ]
 }
