@@ -1,13 +1,10 @@
 // api/admin.js
-// Manage TT creator list (scraped via tikwm.com, no OAuth required).
-//
-// Usage:
-//   GET /admin?secret=...&action=list
-//   GET /admin?secret=...&action=add&handle=stylewithchails
-//   GET /admin?secret=...&action=remove&handle=stylewithchails
-//   GET /admin?secret=...&action=refresh&handle=stylewithchails
+// Edge runtime â Vercel Edge functions run on Cloudflare Workers infra,
+// which often bypasses tikwm's Cloudflare bot challenge.
 
 import { kv } from '@vercel/kv';
+
+export const config = { runtime: 'edge' };
 
 const TIKWM_USER_INFO = 'https://tikwm.com/api/user/info';
 const TIKWM_USER_POSTS = 'https://tikwm.com/api/user/posts';
@@ -23,6 +20,13 @@ const BROWSER_HEADERS = {
 function cleanHandle(raw) {
   if (!raw) return null;
   return String(raw).trim().replace(/^@+/, '').toLowerCase();
+}
+
+function json(obj, status = 200) {
+  return new Response(JSON.stringify(obj), {
+    status,
+    headers: { 'Content-Type': 'application/json' }
+  });
 }
 
 async function tikwmPost(url, params) {
@@ -83,11 +87,7 @@ async function fetchVideos(handle, count = 30, cursor = 0) {
     downloads: v.download_count || 0,
     shareUrl: `https://www.tiktok.com/@${handle}/video/${v.video_id}`
   }));
-  return {
-    videos: items,
-    hasMore: !!d.data?.hasMore,
-    cursor: d.data?.cursor || 0
-  };
+  return { videos: items, hasMore: !!d.data?.hasMore, cursor: d.data?.cursor || 0 };
 }
 
 async function addOrRefresh(handle) {
@@ -107,18 +107,21 @@ async function addOrRefresh(handle) {
   return { creator: record, videoSample: videos.slice(0, 3) };
 }
 
-export default async function handler(req, res) {
-  if (req.query.secret !== process.env.PHIA_SECRET) {
-    return res.status(401).json({ error: 'Unauthorized' });
+export default async function handler(req) {
+  const url = new URL(req.url);
+  const params = url.searchParams;
+
+  if (params.get('secret') !== process.env.PHIA_SECRET) {
+    return json({ error: 'Unauthorized' }, 401);
   }
 
-  const action = (req.query.action || 'list').toLowerCase();
-  const handle = cleanHandle(req.query.handle);
+  const action = (params.get('action') || 'list').toLowerCase();
+  const handle = cleanHandle(params.get('handle'));
 
   try {
     if (action === 'list') {
       const handles = (await kv.smembers('tt:c:index')) || [];
-      if (!handles.length) return res.json({ count: 0, creators: [] });
+      if (!handles.length) return json({ count: 0, creators: [] });
       const recs = await kv.mget(...handles.map(h => `tt:c:${h}`));
       const creators = recs.filter(Boolean).map(r => ({
         handle: r.handle,
@@ -130,27 +133,26 @@ export default async function handler(req, res) {
         addedAt: r.addedAt,
         lastRefreshedAt: r.lastRefreshedAt
       }));
-      return res.json({ count: creators.length, creators });
+      return json({ count: creators.length, creators });
     }
 
     if (action === 'add' || action === 'refresh') {
-      if (!handle) return res.status(400).json({ error: 'Missing ?handle=...' });
+      if (!handle) return json({ error: 'Missing ?handle=...' }, 400);
       const result = await addOrRefresh(handle);
-      return res.json({ ok: true, action, ...result });
+      return json({ ok: true, action, ...result });
     }
 
     if (action === 'remove') {
-      if (!handle) return res.status(400).json({ error: 'Missing ?handle=...' });
+      if (!handle) return json({ error: 'Missing ?handle=...' }, 400);
       await kv.srem('tt:c:index', handle);
       await kv.del(`tt:c:${handle}`);
       await kv.del(`tt:c:videos:${handle}`);
       for (const p of [7, 28, 90, 'lifetime']) await kv.del(`tt:aggregate:cache:${p}`);
-      return res.json({ ok: true, action, handle });
+      return json({ ok: true, action, handle });
     }
 
-    return res.status(400).json({ error: 'Unknown action. Use list | add | remove | refresh' });
+    return json({ error: 'Unknown action. Use list | add | remove | refresh' }, 400);
   } catch (err) {
-    console.error('admin error:', err);
-    res.status(500).json({ error: err.message });
+    return json({ error: err.message }, 500);
   }
 }
