@@ -1,5 +1,5 @@
 // api/aggregate.js
-// Bulk fetch of all connected TT creators' stats â refreshed every 5 min via KV cache.
+// Bulk fetch of all TT creators (scraped via tikwm.com) â refreshed every 5 min via KV cache.
 // Each period (7 / 28 / 90 / lifetime) is cached separately.
 //
 // Usage:
@@ -9,10 +9,8 @@
 
 import { kv } from '@vercel/kv';
 
-const USER_INFO_URL = 'https://open.tiktokapis.com/v2/user/info/';
-const VIDEO_LIST_URL = 'https://open.tiktokapis.com/v2/video/list/';
-const USER_FIELDS = 'open_id,union_id,avatar_url,avatar_url_100,display_name,bio_description,profile_deep_link,is_verified,follower_count,following_count,likes_count,video_count,username';
-const VIDEO_FIELDS = 'id,create_time,cover_image_url,share_url,video_description,duration,view_count,like_count,comment_count,share_count';
+const TIKWM_USER_INFO = 'https://tikwm.com/api/user/info';
+const TIKWM_USER_POSTS = 'https://tikwm.com/api/user/posts';
 const CACHE_TTL_SECONDS = 300; // 5 min
 const LIFETIME_VIDEO_CAP = 500;
 
@@ -28,42 +26,58 @@ function periodLabel(period) {
   return `last_${period}_days`;
 }
 
-async function fetchUserInfo(rec) {
+async function fetchProfileFresh(handle) {
   try {
-    const r = await fetch(`${USER_INFO_URL}?fields=${USER_FIELDS}`, {
-      headers: { Authorization: `Bearer ${rec.accessToken}` }
-    });
+    const r = await fetch(`${TIKWM_USER_INFO}?unique_id=${encodeURIComponent(handle)}`);
     const d = await r.json();
-    return d?.data?.user || null;
+    if (d.code !== 0 || !d.data?.user) return null;
+    const u = d.data.user;
+    const s = d.data.stats || {};
+    return {
+      handle: u.uniqueId,
+      nickname: u.nickname,
+      bio: u.signature,
+      avatarUrl: u.avatarMedium || u.avatarLarger || u.avatarThumb,
+      verified: !!u.verified,
+      profileUrl: `https://www.tiktok.com/@${u.uniqueId}`,
+      followerCount: s.followerCount || 0,
+      followingCount: s.followingCount || 0,
+      likesCount: s.heartCount || s.heart || 0,
+      videoCount: s.videoCount || 0
+    };
   } catch (e) {
     return null;
   }
 }
 
-async function fetchAllVideos(rec, maxItems) {
+async function fetchAllVideos(handle, maxItems) {
   const videos = [];
-  let cursor = null;
+  let cursor = 0;
   let pageCount = 0;
-  const MAX_PAGES = Math.ceil(maxItems / 20);
+  const MAX_PAGES = Math.ceil(maxItems / 30);
 
   while (pageCount < MAX_PAGES && videos.length < maxItems) {
     try {
-      const body = { max_count: 20 };
-      if (cursor) body.cursor = cursor;
-      const r = await fetch(`${VIDEO_LIST_URL}?fields=${VIDEO_FIELDS}`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${rec.accessToken}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(body)
-      });
+      const url = `${TIKWM_USER_POSTS}?unique_id=${encodeURIComponent(handle)}&count=30&cursor=${cursor}`;
+      const r = await fetch(url);
       const d = await r.json();
-      if (d.error?.code && d.error.code !== 'ok') break;
-      const items = d?.data?.videos || [];
+      if (d.code !== 0) break;
+      const items = (d.data?.videos || []).map(v => ({
+        videoId: v.video_id,
+        title: v.title,
+        cover: v.cover || v.origin_cover,
+        duration: v.duration,
+        createTime: v.create_time,
+        views: v.play_count || 0,
+        likes: v.digg_count || 0,
+        comments: v.comment_count || 0,
+        shares: v.share_count || 0,
+        collects: v.collect_count || 0,
+        shareUrl: `https://www.tiktok.com/@${handle}/video/${v.video_id}`
+      }));
       videos.push(...items);
-      if (!d?.data?.has_more) break;
-      cursor = d.data.cursor;
+      if (!d.data?.hasMore) break;
+      cursor = d.data?.cursor || 0;
       pageCount++;
     } catch (e) {
       break;
@@ -90,21 +104,23 @@ export default async function handler(req, res) {
   }
 
   try {
-    const openIds = (await kv.smembers('tt:index')) || [];
-    const records = openIds.length ? await kv.mget(...openIds.map(id => `tt:creator:${id}`)) : [];
+    const handles = (await kv.smembers('tt:c:index')) || [];
+    const records = handles.length ? await kv.mget(...handles.map(h => `tt:c:${h}`)) : [];
     const validCreators = records.filter(Boolean);
 
     const cutoffSeconds = (period === 'lifetime') ? 0 : Math.floor((Date.now() - period * 86400 * 1000) / 1000);
     const videoLimit = (period === 'lifetime') ? LIFETIME_VIDEO_CAP : (period === 90 ? 60 : 30);
 
-    const perCreator = await Promise.all(validCreators.map(async (rec) => {
+    // Throttle: tikwm rate limits ~1 req/sec. Sequential to be safe.
+    const perCreator = [];
+    for (const rec of validCreators) {
       const out = {
-        openId: rec.openId,
-        username: rec.username,
-        displayName: rec.displayName,
-        avatarUrl: rec.avatarUrl100 || rec.avatarUrl,
-        profileDeepLink: rec.profileDeepLink,
-        isVerified: rec.isVerified,
+        handle: rec.handle,
+        nickname: rec.nickname,
+        avatarUrl: rec.avatarUrl,
+        bio: rec.bio,
+        profileUrl: rec.profileUrl,
+        verified: rec.verified,
         followerCount: rec.followerCount || 0,
         followingCount: rec.followingCount || 0,
         likesCount: rec.likesCount || 0,
@@ -114,63 +130,49 @@ export default async function handler(req, res) {
         errors: []
       };
 
-      // 1. Refresh user info
-      const fresh = await fetchUserInfo(rec);
+      // 1. Refresh profile (latest follower/likes counts)
+      const fresh = await fetchProfileFresh(rec.handle);
       if (fresh) {
-        out.followerCount = fresh.follower_count ?? out.followerCount;
-        out.followingCount = fresh.following_count ?? out.followingCount;
-        out.likesCount = fresh.likes_count ?? out.likesCount;
-        out.videoCount = fresh.video_count ?? out.videoCount;
-        out.displayName = fresh.display_name || out.displayName;
-        out.avatarUrl = fresh.avatar_url_100 || fresh.avatar_url || out.avatarUrl;
-        out.isVerified = fresh.is_verified ?? out.isVerified;
-        // Persist back to KV
-        await kv.set(`tt:creator:${rec.openId}`, {
+        out.followerCount = fresh.followerCount;
+        out.followingCount = fresh.followingCount;
+        out.likesCount = fresh.likesCount;
+        out.videoCount = fresh.videoCount;
+        out.nickname = fresh.nickname || out.nickname;
+        out.avatarUrl = fresh.avatarUrl || out.avatarUrl;
+        // Persist back
+        await kv.set(`tt:c:${rec.handle}`, {
           ...rec,
           followerCount: out.followerCount,
           followingCount: out.followingCount,
           likesCount: out.likesCount,
           videoCount: out.videoCount,
-          displayName: out.displayName,
-          avatarUrl: fresh.avatar_url || rec.avatarUrl,
-          avatarUrl100: fresh.avatar_url_100 || rec.avatarUrl100,
-          isVerified: out.isVerified,
+          nickname: out.nickname,
+          avatarUrl: out.avatarUrl,
           lastRefreshedAt: Date.now()
         });
       } else {
-        out.errors.push('user_info_failed');
+        out.errors.push('profile_refresh_failed');
       }
 
       // 2. Fetch videos with period filter
-      const videos = await fetchAllVideos(rec, videoLimit);
+      const videos = await fetchAllVideos(rec.handle, videoLimit);
       const filtered = (period === 'lifetime')
         ? videos
-        : videos.filter(v => (v.create_time || 0) > cutoffSeconds);
+        : videos.filter(v => (v.createTime || 0) > cutoffSeconds);
 
       out.recentPeriod.videos = filtered.length;
       filtered.forEach(v => {
-        out.recentPeriod.views += (v.view_count || 0);
-        out.recentPeriod.likes += (v.like_count || 0);
-        out.recentPeriod.comments += (v.comment_count || 0);
-        out.recentPeriod.shares += (v.share_count || 0);
+        out.recentPeriod.views += (v.views || 0);
+        out.recentPeriod.likes += (v.likes || 0);
+        out.recentPeriod.comments += (v.comments || 0);
+        out.recentPeriod.shares += (v.shares || 0);
       });
 
-      // Top 5 most recent for preview
-      out.recentVideos = videos.slice(0, 5).map(v => ({
-        id: v.id,
-        videoDescription: v.video_description,
-        createTime: v.create_time,
-        coverImageUrl: v.cover_image_url,
-        shareUrl: v.share_url,
-        duration: v.duration,
-        views: v.view_count || 0,
-        likes: v.like_count || 0,
-        comments: v.comment_count || 0,
-        shares: v.share_count || 0
-      }));
+      // Top 5 most recent
+      out.recentVideos = videos.slice(0, 5);
 
-      return out;
-    }));
+      perCreator.push(out);
+    }
 
     const totals = {
       followers: 0,
@@ -200,6 +202,7 @@ export default async function handler(req, res) {
       creatorCount: perCreator.length,
       totals,
       creators: perCreator,
+      source: 'tikwm',
       cached: false
     };
 
