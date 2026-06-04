@@ -12,6 +12,7 @@ const USER_INFO_URL = 'https://open.tiktokapis.com/v2/user/info/';
 const USER_FIELDS = 'open_id,union_id,avatar_url,avatar_url_100,display_name,bio_description,profile_deep_link,is_verified,follower_count,following_count,likes_count,video_count,username';
 
 export default async function handler(req, res) {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
   const { code, state, error, error_description } = req.query;
 
   if (error) {
@@ -105,7 +106,7 @@ export default async function handler(req, res) {
 
 function renderSuccess(rec) {
   return `<!doctype html>
-<html><head><title>Connected Â· Phia TT</title>
+<html><head><meta charset="UTF-8"><title>Connected Â· Phia TT</title>
 <style>
   body{font-family:-apple-system,sans-serif;background:#0a0a0a;color:#fff;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:40px}
   .card{background:#fff;color:#000;border-radius:2px;padding:48px;max-width:480px;text-align:center;border:1px solid #e0e0e0}
@@ -133,7 +134,7 @@ function renderSuccess(rec) {
 }
 
 function renderError(msg) {
-  return `<!doctype html><html><head><title>Error Â· Phia TT</title>
+  return `<!doctype html><html><head><meta charset="UTF-8"><title>Error Â· Phia TT</title>
 <style>body{font-family:sans-serif;background:#0a0a0a;color:#fff;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:40px}
 .card{background:#fff;color:#000;padding:40px;max-width:480px;border-radius:2px;border-left:3px solid #e22}
 h1{margin:0 0 8px;font-size:20px;color:#e22}
