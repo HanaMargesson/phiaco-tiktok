@@ -1,5 +1,5 @@
 // api/callback.js
-// OAuth callback â exchange the authorization code for access + refresh tokens,
+// OAuth callback - exchange the authorization code for access + refresh tokens,
 // then fetch + store the creator's basic profile.
 //
 // TikTok returns: access_token (24h), refresh_token (365d), open_id, scope.
@@ -16,7 +16,7 @@ export default async function handler(req, res) {
   const { code, state, error, error_description } = req.query;
 
   if (error) {
-    return res.status(400).send(renderError(`TikTok error: ${error} â ${error_description || ''}`));
+    return res.status(400).send(renderError(`TikTok error: ${error} - ${error_description || ''}`));
   }
   if (!code || !state) {
     return res.status(400).send(renderError('Missing code or state in callback.'));
@@ -106,7 +106,7 @@ export default async function handler(req, res) {
 
 function renderSuccess(rec) {
   return `<!doctype html>
-<html><head><meta charset="UTF-8"><title>Connected Â· Phia TT</title>
+<html><head><meta charset="UTF-8"><title>Connected &middot; Phia TT</title>
 <style>
   body{font-family:-apple-system,sans-serif;background:#0a0a0a;color:#fff;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:40px}
   .card{background:#fff;color:#000;border-radius:2px;padding:48px;max-width:480px;text-align:center;border:1px solid #e0e0e0}
@@ -121,7 +121,7 @@ function renderSuccess(rec) {
 </style></head>
 <body><div class="card">
   ${rec.avatarUrl100 ? `<img src="${rec.avatarUrl100}" class="avatar" alt="">` : ''}
-  <h1 class="blue">Connected â</h1>
+  <h1 class="blue">Connected &check;</h1>
   <div class="handle">@${rec.username}</div>
   <div class="grid">
     <div><div class="label">Followers</div><div class="stat">${(rec.followerCount||0).toLocaleString()}</div></div>
@@ -129,12 +129,12 @@ function renderSuccess(rec) {
     <div><div class="label">Likes</div><div class="stat">${(rec.likesCount||0).toLocaleString()}</div></div>
   </div>
   <p style="color:#666;font-size:13px;margin:24px 0 0">You can close this tab.</p>
-  <p style="margin-top:24px"><a href="/">â View Dashboard</a></p>
+  <p style="margin-top:24px"><a href="/">&rarr; View Dashboard</a></p>
 </div></body></html>`;
 }
 
 function renderError(msg) {
-  return `<!doctype html><html><head><meta charset="UTF-8"><title>Error Â· Phia TT</title>
+  return `<!doctype html><html><head><meta charset="UTF-8"><title>Error &middot; Phia TT</title>
 <style>body{font-family:sans-serif;background:#0a0a0a;color:#fff;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:40px}
 .card{background:#fff;color:#000;padding:40px;max-width:480px;border-radius:2px;border-left:3px solid #e22}
 h1{margin:0 0 8px;font-size:20px;color:#e22}
