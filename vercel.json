@@ -7,7 +7,8 @@
     { "source": "/aggregate", "destination": "/api/aggregate" },
     { "source": "/admin", "destination": "/api/admin" },
     { "source": "/snapshot", "destination": "/api/snapshot" },
-    { "source": "/refresh", "destination": "/api/refresh" }
+    { "source": "/refresh", "destination": "/api/refresh" },
+    { "source": "/connect", "destination": "/api/connect" }
   ],
   "crons": [
     { "path": "/api/refresh", "schedule": "0 8 * * *" },
