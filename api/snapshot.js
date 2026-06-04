@@ -1,91 +1,80 @@
 // api/snapshot.js
-// Daily cron — captures point-in-time stats for every connected TT creator.
+// Daily cron — captures point-in-time stats for every OAuth-connected TT creator.
+// Calls TT API directly using stored access_tokens (no more tikwm scraping).
 // Stored as tt:snapshot:{handle}:{YYYY-MM-DD} for velocity (growth-over-time) charts.
-//
-// Triggered:
-//   - Vercel cron daily at 9 AM UTC (vercel.json)
-//   - Manually: GET /snapshot?secret=...
 
 import { kv } from '@vercel/kv';
 
-const TIKWM_USER_INFO = 'https://tikwm.com/api/user/info';
-const TIKWM_USER_POSTS = 'https://tikwm.com/api/user/posts';
-
-const BROWSER_HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-  'Accept': 'application/json, text/plain, */*',
-  'Accept-Language': 'en-US,en;q=0.9',
-  'Origin': 'https://tikwm.com',
-  'Referer': 'https://tikwm.com/'
-};
-
-export const config = { runtime: 'edge' };
-
-function json(obj, status = 200) {
-  return new Response(JSON.stringify(obj), {
-    status,
-    headers: { 'Content-Type': 'application/json' }
-  });
-}
+const USER_INFO_URL = 'https://open.tiktokapis.com/v2/user/info/';
+const VIDEO_LIST_URL = 'https://open.tiktokapis.com/v2/video/list/';
+const USER_FIELDS = 'open_id,union_id,avatar_url,display_name,follower_count,following_count,likes_count,video_count,bio_description,is_verified';
+const VIDEO_FIELDS = 'id,cover_image_url,share_url,video_description,duration,create_time,view_count,like_count,comment_count,share_count';
 
 function today() {
-  return new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-}
-
-async function tikwmPost(url, params) {
-  const body = new URLSearchParams(params).toString();
-  try {
-    const r = await fetch(url, {
-      method: 'POST',
-      headers: { ...BROWSER_HEADERS, 'Content-Type': 'application/x-www-form-urlencoded' },
-      body
-    });
-    const text = await r.text();
-    try {
-      return JSON.parse(text);
-    } catch {
-      return { error: 'non_json', status: r.status };
-    }
-  } catch (e) {
-    return { error: e.message };
-  }
+  return new Date().toISOString().slice(0, 10);
 }
 
 async function snapshotCreator(handle) {
-  // Fetch profile
-  const infoD = await tikwmPost(TIKWM_USER_INFO, { unique_id: handle });
-  if (infoD.code !== 0 || !infoD.data?.user) {
-    return { handle, status: 'profile_failed', error: infoD.error || infoD.msg };
+  const rec = await kv.get(`tt:c:${handle}`);
+  if (!rec?.openId) return { handle, status: 'no_record_or_openid' };
+
+  const tokenRec = await kv.get(`tt:creator:${rec.openId}`);
+  if (!tokenRec?.accessToken) return { handle, status: 'no_token' };
+  const access_token = tokenRec.accessToken;
+
+  // Fetch fresh profile
+  let userData = {};
+  try {
+    const r = await fetch(`${USER_INFO_URL}?fields=${USER_FIELDS}`, {
+      headers: { Authorization: `Bearer ${access_token}` }
+    });
+    const d = await r.json();
+    if (d.error?.code && d.error.code !== 'ok') {
+      return { handle, status: 'user_info_failed', error: d.error.message || d.error.code };
+    }
+    userData = d?.data?.user || {};
+  } catch (e) {
+    return { handle, status: 'user_info_error', error: e.message };
   }
-  const u = infoD.data.user;
-  const s = infoD.data.stats || {};
 
-  // Fetch recent videos (30 most recent)
-  const postsD = await tikwmPost(TIKWM_USER_POSTS, { unique_id: handle, count: 30, cursor: 0 });
-  const videos = (postsD.data?.videos || []).map(v => ({
-    videoId: v.video_id,
-    createTime: v.create_time,
-    views: v.play_count || 0,
-    likes: v.digg_count || 0,
-    comments: v.comment_count || 0,
-    shares: v.share_count || 0
-  }));
+  // Fetch videos
+  let videos = [];
+  try {
+    const r = await fetch(`${VIDEO_LIST_URL}?fields=${VIDEO_FIELDS}`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${access_token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ max_count: 20 })
+    });
+    const d = await r.json();
+    videos = (d?.data?.videos || []).map(v => ({
+      videoId: v.id,
+      title: v.video_description,
+      cover: v.cover_image_url,
+      duration: v.duration,
+      createTime: v.create_time,
+      views: v.view_count || 0,
+      likes: v.like_count || 0,
+      comments: v.comment_count || 0,
+      shares: v.share_count || 0,
+      shareUrl: v.share_url
+    }));
+  } catch (e) {
+    // Non-fatal — snapshot what we have
+  }
 
-  const recent28dCutoff = Math.floor((Date.now() - 28 * 86400 * 1000) / 1000);
-  const recent28d = videos.filter(v => v.createTime > recent28dCutoff);
+  const cutoff28d = Math.floor((Date.now() - 28 * 86400 * 1000) / 1000);
+  const recent28d = videos.filter(v => v.createTime > cutoff28d);
   const sum = (arr, k) => arr.reduce((a, v) => a + (v[k] || 0), 0);
 
   const snapshot = {
-    handle: u.uniqueId,
+    handle,
     capturedAt: Date.now(),
     capturedDate: today(),
-    // Lifetime counters
-    followerCount: s.followerCount || 0,
-    followingCount: s.followingCount || 0,
-    likesCount: s.heartCount || s.heart || 0,
-    videoCount: s.videoCount || 0,
-    verified: !!u.verified,
-    // 28-day window
+    followerCount: userData.follower_count || 0,
+    followingCount: userData.following_count || 0,
+    likesCount: userData.likes_count || 0,
+    videoCount: userData.video_count || 0,
+    verified: !!userData.is_verified,
     last28d: {
       videos: recent28d.length,
       views: sum(recent28d, 'views'),
@@ -93,37 +82,48 @@ async function snapshotCreator(handle) {
       comments: sum(recent28d, 'comments'),
       shares: sum(recent28d, 'shares')
     },
-    // All recent (up to 30) for per-video tracking
     recentVideoStats: videos.slice(0, 30)
   };
 
-  // Store snapshot keyed by date
-  await kv.set(`tt:snapshot:${u.uniqueId}:${today()}`, snapshot, { ex: 60 * 86400 }); // 60-day TTL
-  // Also keep latest pointer
-  await kv.set(`tt:snapshot:${u.uniqueId}:latest`, snapshot);
-  // Add date to creator's snapshot history index
-  await kv.sadd(`tt:snapshot:${u.uniqueId}:dates`, today());
+  // Store snapshot (60-day TTL)
+  await kv.set(`tt:snapshot:${handle}:${today()}`, snapshot, { ex: 60 * 86400 });
+  await kv.set(`tt:snapshot:${handle}:latest`, snapshot);
+  await kv.sadd(`tt:snapshot:${handle}:dates`, today());
 
-  return { handle: u.uniqueId, status: 'captured', followers: snapshot.followerCount, videos: snapshot.videoCount };
+  // Also refresh the canonical creator record with latest stats
+  await kv.set(`tt:c:${handle}`, {
+    ...rec,
+    followerCount: snapshot.followerCount,
+    followingCount: snapshot.followingCount,
+    likesCount: snapshot.likesCount,
+    videoCount: snapshot.videoCount,
+    lastRefreshedAt: Date.now()
+  });
+  if (videos.length > 0) {
+    await kv.set(`tt:c:videos:${handle}`, { videos, fetchedAt: Date.now() });
+  }
+
+  return {
+    handle,
+    status: 'captured',
+    followers: snapshot.followerCount,
+    videoCount: snapshot.videoCount,
+    last28dVideos: snapshot.last28d.videos
+  };
 }
 
-export default async function handler(req) {
-  const url = new URL(req.url);
-  const params = url.searchParams;
-
-  // Allow Vercel cron OR manual secret
-  const isCron = req.headers.get('user-agent')?.includes('vercel-cron');
-  if (!isCron && params.get('secret') !== process.env.PHIA_SECRET) {
-    return json({ error: 'Unauthorized' }, 401);
+export default async function handler(req, res) {
+  const isCron = req.headers['user-agent']?.includes('vercel-cron');
+  if (!isCron && req.query.secret !== process.env.PHIA_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
   }
 
   try {
     const handles = (await kv.smembers('tt:c:index')) || [];
     if (!handles.length) {
-      return json({ ok: true, capturedAt: new Date().toISOString(), total: 0, results: [] });
+      return res.json({ ok: true, capturedAt: new Date().toISOString(), total: 0, results: [] });
     }
 
-    // Sequential to respect tikwm rate limits (~1 req/sec)
     const results = [];
     for (const h of handles) {
       try {
@@ -133,7 +133,7 @@ export default async function handler(req) {
       }
     }
 
-    return json({
+    return res.json({
       ok: true,
       capturedAt: new Date().toISOString(),
       date: today(),
@@ -145,6 +145,7 @@ export default async function handler(req) {
       results
     });
   } catch (err) {
-    return json({ error: err.message }, 500);
+    console.error('snapshot error:', err);
+    return res.status(500).json({ error: err.message });
   }
 }
