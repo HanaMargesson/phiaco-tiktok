@@ -97,6 +97,53 @@ export default async function handler(req, res) {
       await kv.set(`tt:username:${user.username}`, open_id);
     }
 
+    // Also write dashboard-compatible record + fetch videos for the dashboard KV namespace.
+    const dashboardRecord = {
+      handle: record.username,
+      nickname: record.displayName,
+      bio: record.bioDescription,
+      avatarUrl: record.avatarUrl100 || record.avatarUrl,
+      verified: record.isVerified,
+      profileUrl: record.profileDeepLink || `https://www.tiktok.com/@${record.username}`,
+      followerCount: record.followerCount,
+      followingCount: record.followingCount,
+      likesCount: record.likesCount,
+      videoCount: record.videoCount,
+      openId: record.openId,
+      addedAt: now,
+      lastRefreshedAt: now,
+      source: 'oauth'
+    };
+    await kv.set(`tt:c:${record.username}`, dashboardRecord);
+    await kv.sadd('tt:c:index', record.username);
+
+    // Fetch videos via TT API so dashboard modal has them.
+    try {
+      const VIDEO_LIST_URL = 'https://open.tiktokapis.com/v2/video/list/';
+      const VIDEO_FIELDS = 'id,cover_image_url,share_url,video_description,duration,create_time,view_count,like_count,comment_count,share_count';
+      const videoRes = await fetch(`${VIDEO_LIST_URL}?fields=${VIDEO_FIELDS}`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${access_token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ max_count: 20 })
+      });
+      const videoData = await videoRes.json();
+      const videos = (videoData?.data?.videos || []).map(v => ({
+        videoId: v.id,
+        title: v.video_description,
+        cover: v.cover_image_url,
+        duration: v.duration,
+        createTime: v.create_time,
+        views: v.view_count || 0,
+        likes: v.like_count || 0,
+        comments: v.comment_count || 0,
+        shares: v.share_count || 0,
+        shareUrl: v.share_url
+      }));
+      await kv.set(`tt:c:videos:${record.username}`, { videos, fetchedAt: now });
+    } catch (e) {
+      console.error('video fetch failed (non-fatal):', e.message);
+    }
+
     res.status(200).send(renderSuccess(record));
   } catch (err) {
     console.error('callback error:', err);
