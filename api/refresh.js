@@ -10,7 +10,7 @@
 import { kv } from '@vercel/kv';
 
 const TOKEN_URL = 'https://open.tiktokapis.com/v2/oauth/token/';
-const REFRESH_THRESHOLD_MS = 2 * 60 * 60 * 1000; // 2h
+const REFRESH_THRESHOLD_MS = 26 * 60 * 60 * 1000; // 26h (daily cron, refresh all tokens proactively)
 
 export default async function handler(req, res) {
   // Allow either Vercel cron header or manual ?secret=...
