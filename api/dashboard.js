@@ -83,6 +83,8 @@ const HTML = `<!doctype html>
     .creator-info { flex: 1; min-width: 0; }
     .creator-name { font-weight: 600; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .creator-handle { font-family: var(--font-mono); font-size: 11px; color: var(--phia-gray); }
+.status-pill { display: inline-block; font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase; padding: 2px 6px; border-radius: 2px; margin-left: 6px; vertical-align: middle; }
+.status-reconnect { background: #FCE8E8; color: #B91C1C; border: 1px solid #B91C1C; font-weight: 600; }
     .creator-stats { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; padding-top: 12px; border-top: 1px solid var(--phia-light-gray); }
     .creator-stat .label { font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--phia-gray); margin-bottom: 4px; }
     .creator-stat .value { font-size: 14px; font-weight: 500; }
@@ -275,7 +277,7 @@ const HTML = `<!doctype html>
               <div class="creator-top">
                 <div class="creator-avatar">\${c.avatarUrl ? '<img src="' + c.avatarUrl + '" alt="">' : ''}</div>
                 <div class="creator-info">
-                  <div class="creator-name">\${c.nickname || c.handle}\${c.verified ? ' ✓' : ''}</div>
+                  <div class="creator-name">\${c.nickname || c.handle}\${c.verified ? ' ✓' : ''}\${c.errors && c.errors.length > 0 ? '<span class="status-pill status-reconnect">⚠ RECONNECT</span>' : ''}</div>
                   <div class="creator-handle">@\${c.handle}</div>
                 </div>
               </div>
