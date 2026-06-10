@@ -45,6 +45,18 @@ export default async function handler(req, res) {
       const videosBundle = await kv.get(`tt:c:videos:${handle}`);
       const videos = videosBundle?.videos || [];
 
+      // Token health check — flag if access/refresh both expired
+      const errors = [];
+      if (rec.openId) {
+        const tokenRec = await kv.get(`tt:creator:${rec.openId}`);
+        const now = Date.now();
+        if (!tokenRec?.accessToken) {
+          errors.push('token: no access token stored — creator must reconnect');
+        } else if ((tokenRec.accessExpiresAt || 0) < now && (tokenRec.refreshExpiresAt || 0) < now) {
+          errors.push('token: access and refresh tokens both expired — creator must reconnect');
+        }
+      }
+
       if (debug) {
         debugInfo.perHandle[handle] = {
           hasRecord: !!rec,
@@ -77,7 +89,8 @@ export default async function handler(req, res) {
         likesCount: rec.likesCount || 0,
         videoCount: rec.videoCount || 0,
         recentPeriod: periodStats,
-        recentVideos: videos.slice(0, 12)
+        recentVideos: videos.slice(0, 12),
+        errors
       });
     }
 
