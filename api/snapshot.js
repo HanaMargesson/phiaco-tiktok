@@ -103,6 +103,22 @@ async function snapshotCreator(handle) {
     await kv.set(`tt:c:videos:${handle}`, { videos, fetchedAt: Date.now() });
   }
 
+// === Phase 2: dual-write snapshot stats to Phia internal Supabase ===
+  try {
+    const { safeUpdate, isSupabaseEnabled } = await import('../lib/supabase.js');
+    if (isSupabaseEnabled() && rec.openId) {
+      await safeUpdate('tiktok_account_info', {
+        follower_count: snapshot.followerCount || 0,
+        following_count: snapshot.followingCount || 0,
+        likes_count: snapshot.likesCount || 0,
+        video_count: snapshot.videoCount || 0,
+        last_refreshed_at: new Date().toISOString(),
+      }, { open_id: rec.openId });
+    }
+  } catch (e) {
+    console.error('[supabase] TT snapshot dual-write threw:', e?.message);
+  }
+
   return {
     handle,
     status: 'captured',
