@@ -64,6 +64,24 @@ export default async function handler(req, res) {
           lastRefreshedAt: now
         };
         await kv.set(`tt:creator:${rec.openId}`, updated);
+        // === Phase 2: dual-write refreshed TT tokens to Phia internal Supabase ===
+        try {
+          const { encryptToken } = await import('../lib/token-crypto.js');
+          const { safeUpdate, isSupabaseEnabled } = await import('../lib/supabase.js');
+          if (isSupabaseEnabled()) {
+            await safeUpdate('tiktok_account_info', {
+              access_token: encryptToken(updated.accessToken),
+              access_expires_at: new Date(updated.accessExpiresAt).toISOString(),
+              refresh_token: encryptToken(updated.refreshToken),
+              refresh_expires_at: new Date(updated.refreshExpiresAt).toISOString(),
+              last_refreshed_at: new Date(updated.lastRefreshedAt).toISOString(),
+              status: 'active',
+              last_error: null,
+            }, { open_id: rec.openId });
+          }
+        } catch (e) {
+          console.error('[supabase] TT refresh dual-write threw:', e?.message);
+        }
         results.push({ openId: rec.openId, username: rec.username, status: 'refreshed' });
       } catch (e) {
         results.push({ openId: rec.openId, username: rec.username, status: 'error', error: e.message });
