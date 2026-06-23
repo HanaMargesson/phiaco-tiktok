@@ -144,6 +144,46 @@ export default async function handler(req, res) {
       console.error('video fetch failed (non-fatal):', e.message);
     }
 
+// === Phase 2: dual-write to Phia internal Supabase ===
+    try {
+      const { encryptToken } = await import('../lib/token-crypto.js');
+      const { safeUpsert, lookupPersonIdByTtHandle, isSupabaseEnabled } = await import('../lib/supabase.js');
+      if (isSupabaseEnabled()) {
+        const personId = await lookupPersonIdByTtHandle(record.username);
+        if (personId) {
+          await safeUpsert('tiktok_account_info', {
+            person_id: personId,
+            open_id: record.openId,
+            union_id: record.unionId || null,
+            handle: record.username,
+            display_name: record.displayName || null,
+            bio_description: record.bioDescription || null,
+            profile_deep_link: record.profileDeepLink || null,
+            avatar_url: record.avatarUrl100 || record.avatarUrl || null,
+            is_verified: !!record.isVerified,
+            access_token: encryptToken(record.accessToken),
+            access_expires_at: new Date(record.accessExpiresAt).toISOString(),
+            refresh_token: encryptToken(record.refreshToken),
+            refresh_expires_at: new Date(record.refreshExpiresAt).toISOString(),
+            scope: record.scope || null,
+            follower_count: record.followerCount || 0,
+            following_count: record.followingCount || 0,
+            likes_count: record.likesCount || 0,
+            video_count: record.videoCount || 0,
+            status: 'active',
+            last_error: null,
+            connected_at: new Date(record.connectedAt).toISOString(),
+            last_refreshed_at: new Date(record.lastRefreshedAt).toISOString(),
+            disconnected_at: null,
+          }, 'open_id');
+        } else {
+          console.warn('[supabase] No marketing.people row for @' + record.username + ' — TT dual-write skipped');
+        }
+      }
+    } catch (e) {
+      console.error('[supabase] TT callback dual-write threw:', e?.message);
+    }
+
     res.status(200).send(renderSuccess(record));
   } catch (err) {
     console.error('callback error:', err);
